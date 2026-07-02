@@ -1,26 +1,52 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+* {
+  box-sizing: border-box;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+html,
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Google Maps autocomplete dropdown - dark theme */
+.pac-container {
+  background-color: #1f2937 !important;
+  border: 1px solid #374151 !important;
+  border-radius: 12px !important;
+  margin-top: 4px !important;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5) !important;
+  font-family: inherit !important;
+  overflow: hidden;
+}
+
+.pac-item {
+  color: #e5e7eb !important;
+  padding: 10px 14px !important;
+  border-top: 1px solid #374151 !important;
+  cursor: pointer;
+  font-size: 13px !important;
+}
+
+.pac-item:first-child {
+  border-top: none !important;
+}
+
+.pac-item:hover,
+.pac-item-selected {
+  background-color: #374151 !important;
+}
+
+.pac-item-query {
+  color: #ffffff !important;
+  font-size: 13px !important;
+}
+
+.pac-matched {
+  color: #60a5fa !important;
+}
+
+.pac-icon {
+  filter: invert(0.7) !important;
 }
