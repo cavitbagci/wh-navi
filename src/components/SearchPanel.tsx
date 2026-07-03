@@ -1,12 +1,15 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { useMapsLibrary } from "@vis.gl/react-google-maps";
+import AppLogo from "./AppLogo";
 
 interface Props {
   onRouteFound: (result: google.maps.DirectionsResult) => void;
   onClear: () => void;
   hasRoute: boolean;
 }
+
+type Field = "origin" | "dest";
 
 export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) {
   const placesLib = useMapsLibrary("places");
@@ -16,6 +19,7 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
   const originPlaceRef = useRef<google.maps.places.PlaceResult | null>(null);
   const destPlaceRef = useRef<google.maps.places.PlaceResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [locating, setLocating] = useState<Field | null>(null);
   const [error, setError] = useState("");
   const [isExpanded, setIsExpanded] = useState(true);
 
@@ -43,18 +47,43 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
     };
   }, [placesLib]);
 
-  const useMyLocation = () => {
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition((pos) => {
-      const latlng = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
-      const geocoder = new google.maps.Geocoder();
-      geocoder.geocode({ location: latlng }, (results, status) => {
-        if (status === "OK" && results?.[0]) {
-          if (originRef.current) originRef.current.value = results[0].formatted_address;
-          originPlaceRef.current = results[0];
-        }
-      });
-    });
+  const useMyLocation = (field: Field) => {
+    if (!navigator.geolocation) {
+      setError("Tarayıcınız konum özelliğini desteklemiyor.");
+      return;
+    }
+    setLocating(field);
+    setError("");
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const latlng = new google.maps.LatLng(
+          pos.coords.latitude,
+          pos.coords.longitude
+        );
+        const geocoder = new google.maps.Geocoder();
+        geocoder.geocode({ location: latlng }, (results, status) => {
+          setLocating(null);
+          if (status === "OK" && results?.[0]) {
+            const place = results[0];
+            if (field === "origin") {
+              if (originRef.current) originRef.current.value = place.formatted_address;
+              originPlaceRef.current = place;
+            } else {
+              if (destRef.current) destRef.current.value = place.formatted_address;
+              destPlaceRef.current = place;
+            }
+          } else {
+            setError("Konum adrese çevrilemedi.");
+          }
+        });
+      },
+      () => {
+        setLocating(null);
+        setError("Konum alınamadı. İzin verdiğinizden emin olun.");
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   };
 
   const handleRoute = async () => {
@@ -107,13 +136,13 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
           className="flex items-center justify-between px-4 py-3 cursor-pointer"
           onClick={() => setIsExpanded(!isExpanded)}
         >
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center">
-              <span className="text-white text-sm">🧭</span>
-            </div>
-            <span className="text-white font-semibold text-sm">WH Navigasyon</span>
+          <div className="flex items-center gap-2.5">
+            <AppLogo size={30} />
+            <span className="text-white font-semibold text-sm tracking-wide">
+              WH Navigasyon
+            </span>
           </div>
-          <button className="text-gray-400 hover:text-white transition-colors">
+          <button className="text-gray-400 hover:text-white transition-colors text-xs">
             {isExpanded ? "▲" : "▼"}
           </button>
         </div>
@@ -127,14 +156,19 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
               <input
                 ref={originRef}
                 placeholder="Başlangıç noktası"
-                className="flex-1 bg-transparent text-white text-sm placeholder-gray-500 outline-none"
+                className="flex-1 bg-transparent text-white text-sm placeholder-gray-500 outline-none min-w-0"
               />
               <button
-                onClick={useMyLocation}
-                className="text-blue-400 hover:text-blue-300 text-xs transition-colors flex-shrink-0"
-                title="Konumumu kullan"
+                onClick={() => useMyLocation("origin")}
+                disabled={locating !== null}
+                className="text-blue-400 hover:text-blue-300 disabled:opacity-40 transition-colors flex-shrink-0 text-base"
+                title="Konumumu başlangıç yap"
               >
-                📍
+                {locating === "origin" ? (
+                  <span className="inline-block w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  "📍"
+                )}
               </button>
             </div>
 
@@ -144,8 +178,20 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
               <input
                 ref={destRef}
                 placeholder="Varış noktası"
-                className="flex-1 bg-transparent text-white text-sm placeholder-gray-500 outline-none"
+                className="flex-1 bg-transparent text-white text-sm placeholder-gray-500 outline-none min-w-0"
               />
+              <button
+                onClick={() => useMyLocation("dest")}
+                disabled={locating !== null}
+                className="text-blue-400 hover:text-blue-300 disabled:opacity-40 transition-colors flex-shrink-0 text-base"
+                title="Konumumu varış yap"
+              >
+                {locating === "dest" ? (
+                  <span className="inline-block w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  "📍"
+                )}
+              </button>
             </div>
 
             {error && <p className="text-red-400 text-xs px-1">{error}</p>}

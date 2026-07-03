@@ -28,6 +28,7 @@ export default function NavigationApp() {
   const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
   const [navigating, setNavigating] = useState(false);
   const [nearbyRadar, setNearbyRadar] = useState<{ radar: RadarPoint; distance: number } | null>(null);
+  const [mapZoom, setMapZoom] = useState(6);
   const watchIdRef = useRef<number | null>(null);
   const alertCooldownRef = useRef<number>(0);
 
@@ -117,6 +118,7 @@ export default function NavigationApp() {
         defaultCenter={{ lat: 39.0, lng: 35.0 }}
         defaultZoom={6}
         mapId="DEMO_MAP_ID"
+        onZoomChanged={(e) => setMapZoom(e.detail.zoom)}
         gestureHandling="greedy"
         disableDefaultUI={false}
         colorScheme="DARK"
@@ -134,10 +136,17 @@ export default function NavigationApp() {
         />
       </Map>
 
+      {/* Zoom ipucu */}
+      {radarsLoaded && mapZoom < 10 && !navigating && (
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 bg-gray-900/90 backdrop-blur-sm text-gray-300 text-xs px-4 py-2 rounded-full border border-gray-700/50 whitespace-nowrap">
+          📷 Radar noktalarını görmek için yakınlaştır
+        </div>
+      )}
+
       {/* Radar sayısı */}
-      {radarsLoaded && (
+      {radarsLoaded && mapZoom >= 10 && (
         <div className="absolute bottom-6 right-4 z-20 bg-gray-900/90 backdrop-blur-sm text-gray-400 text-xs px-3 py-1.5 rounded-full border border-gray-700/50">
-          📷 {radars.length} radar noktası
+          📷 {radars.length} nokta
         </div>
       )}
 
@@ -157,6 +166,7 @@ export default function NavigationApp() {
           navigating={navigating}
           onStartNavigation={startNavigation}
           onStopNavigation={stopNavigation}
+          onCancel={handleClear}
         />
       )}
 
