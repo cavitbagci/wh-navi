@@ -28,8 +28,8 @@ export default function RoutePanel({
   if (routes.length === 0) return null;
 
   return (
-    <div className="absolute bottom-6 left-4 right-4 z-20 max-w-md mx-auto">
-      <div className="bg-gray-900/95 backdrop-blur-md rounded-2xl shadow-2xl border border-gray-700/50 p-4 space-y-3">
+    <div className="absolute left-4 right-4 z-20 max-w-md mx-auto md:right-auto md:w-96 md:mx-0" style={{ bottom: "max(1rem, env(safe-area-inset-bottom))" }}>
+      <div className="bg-gray-900/95 backdrop-blur-md rounded-2xl shadow-2xl border border-gray-700/50 p-3 space-y-2 max-h-[45vh] flex flex-col">
         {/* Başlık + iptal butonu */}
         <div className="flex items-center justify-between">
           <span className="text-gray-400 text-xs font-medium uppercase tracking-wide">
@@ -44,8 +44,8 @@ export default function RoutePanel({
           </button>
         </div>
 
-        {/* Rota seçenekleri */}
-        <div className="space-y-2">
+        {/* Rota seçenekleri — scroll edilebilir */}
+        <div className="space-y-1.5 overflow-y-auto flex-1">
           {routes.map((route, i) => (
             <button
               key={i}
@@ -78,24 +78,26 @@ export default function RoutePanel({
           ))}
         </div>
 
-        {/* Navigasyon butonu */}
-        {!navigating ? (
-          <button
-            onClick={onStartNavigation}
-            className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
-          >
-            <span>▶</span>
-            <span>Navigasyonu Başlat</span>
-          </button>
-        ) : (
-          <button
-            onClick={onStopNavigation}
-            className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-2"
-          >
-            <span>■</span>
-            <span>Navigasyonu Durdur</span>
-          </button>
-        )}
+        {/* Navigasyon butonu — sabit altta */}
+        <div className="flex-shrink-0 pt-1">
+          {!navigating ? (
+            <button
+              onClick={onStartNavigation}
+              className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 text-sm"
+            >
+              <span>▶</span>
+              <span>Navigasyonu Başlat</span>
+            </button>
+          ) : (
+            <button
+              onClick={onStopNavigation}
+              className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 text-sm"
+            >
+              <span>■</span>
+              <span>Navigasyonu Durdur</span>
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -129,7 +129,7 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
   };
 
   return (
-    <div className="absolute top-4 left-4 right-4 z-20 max-w-md mx-auto">
+    <div className="absolute top-4 left-4 right-4 z-20 max-w-md mx-auto md:right-auto md:w-96 md:mx-0">
       <div className="bg-gray-900/95 backdrop-blur-md rounded-2xl shadow-2xl border border-gray-700/50 overflow-hidden">
         {/* Header */}
         <div

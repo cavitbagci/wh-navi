@@ -47,9 +47,18 @@ export default function MapContent({
       .slice(0, MAX_VISIBLE);
   }, [radars, zoom, bounds]);
 
-  // DirectionsRenderer kurulumu
+  // directionsResult değişince renderer'ı sıfırdan oluştur veya temizle
   useEffect(() => {
     if (!routesLib || !map) return;
+
+    // Önceki renderer'ı kaldır
+    if (rendererRef.current) {
+      rendererRef.current.setMap(null);
+      rendererRef.current = null;
+    }
+
+    if (!directionsResult) return;
+
     const renderer = new routesLib.DirectionsRenderer({
       suppressMarkers: false,
       polylineOptions: {
@@ -59,18 +68,23 @@ export default function MapContent({
       },
     });
     renderer.setMap(map);
+    renderer.setDirections(directionsResult);
+    renderer.setRouteIndex(selectedRouteIndex);
     rendererRef.current = renderer;
+
     return () => {
       renderer.setMap(null);
       rendererRef.current = null;
     };
-  }, [routesLib, map]);
+  // selectedRouteIndex kasıtlı olarak bağımlılıktan çıkarıldı — ayrı effect hallediyor
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [directionsResult, routesLib, map]);
 
+  // Sadece rota seçimi değişince index güncelle
   useEffect(() => {
-    if (!rendererRef.current || !directionsResult) return;
-    rendererRef.current.setDirections(directionsResult);
+    if (!rendererRef.current) return;
     rendererRef.current.setRouteIndex(selectedRouteIndex);
-  }, [directionsResult, selectedRouteIndex]);
+  }, [selectedRouteIndex]);
 
   useEffect(() => {
     if (!map || !userPos || !navigating) return;
