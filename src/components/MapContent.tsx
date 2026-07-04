@@ -1,10 +1,10 @@
 "use client";
 import { useEffect, useRef, useMemo, useState } from "react";
 import { useMap, useMapsLibrary, AdvancedMarker } from "@vis.gl/react-google-maps";
-import type { RadarPoint } from "@/app/api/radars/route";
+import type { RadarPoint, RadarType } from "@/app/api/radars/route";
 
 const RADAR_ZOOM_MIN = 10;
-const MAX_VISIBLE = 80;
+const MAX_VISIBLE = 100;
 
 interface Props {
   radars: RadarPoint[];
@@ -12,6 +12,58 @@ interface Props {
   directionsResult: google.maps.DirectionsResult | null;
   selectedRouteIndex: number;
   navigating: boolean;
+}
+
+const TYPE_STYLE: Record<
+  RadarType,
+  { bg: string; border: string; label: string; emoji: string }
+> = {
+  speed:      { bg: "#dc2626", border: "#fca5a5", label: "H",  emoji: "📷" },
+  redlight:   { bg: "#d97706", border: "#fcd34d", label: "I",  emoji: "🚦" },
+  mobile:     { bg: "#ca8a04", border: "#fde047", label: "M",  emoji: "📡" },
+  corridor:   { bg: "#7c3aed", border: "#c4b5fd", label: "K",  emoji: "🛣" },
+  checkpoint: { bg: "#0369a1", border: "#7dd3fc", label: "D",  emoji: "🚔" },
+};
+
+function RadarMarker({ radar }: { radar: RadarPoint }) {
+  const style = TYPE_STYLE[radar.type];
+  return (
+    <div className="relative flex flex-col items-center">
+      <div
+        style={{
+          width: 26,
+          height: 26,
+          background: style.bg,
+          border: `2px solid ${style.border}`,
+          borderRadius: "50%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          boxShadow: "0 2px 6px rgba(0,0,0,0.5)",
+        }}
+      >
+        <span style={{ fontSize: 11, color: "#fff", fontWeight: 700, lineHeight: 1 }}>
+          {style.label}
+        </span>
+      </div>
+      {radar.maxspeed && (
+        <div
+          style={{
+            marginTop: 2,
+            background: style.bg,
+            color: "#fff",
+            fontSize: 8,
+            fontWeight: 700,
+            padding: "1px 4px",
+            borderRadius: 3,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {radar.maxspeed}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function MapContent({
@@ -27,7 +79,6 @@ export default function MapContent({
   const [zoom, setZoom] = useState(6);
   const [bounds, setBounds] = useState<google.maps.LatLngBounds | null>(null);
 
-  // Zoom ve görüntü alanı değişikliklerini takip et
   useEffect(() => {
     if (!map) return;
     const listeners = [
@@ -39,7 +90,6 @@ export default function MapContent({
     return () => listeners.forEach((l) => l.remove());
   }, [map]);
 
-  // Sadece görüntü alanındaki radarları göster, max MAX_VISIBLE
   const visibleRadars = useMemo(() => {
     if (zoom < RADAR_ZOOM_MIN || !bounds) return [];
     return radars
@@ -47,11 +97,10 @@ export default function MapContent({
       .slice(0, MAX_VISIBLE);
   }, [radars, zoom, bounds]);
 
-  // directionsResult değişince renderer'ı sıfırdan oluştur veya temizle
+  // Recreate renderer when directionsResult changes
   useEffect(() => {
     if (!routesLib || !map) return;
 
-    // Önceki renderer'ı kaldır
     if (rendererRef.current) {
       rendererRef.current.setMap(null);
       rendererRef.current = null;
@@ -76,11 +125,10 @@ export default function MapContent({
       renderer.setMap(null);
       rendererRef.current = null;
     };
-  // selectedRouteIndex kasıtlı olarak bağımlılıktan çıkarıldı — ayrı effect hallediyor
+  // selectedRouteIndex intentionally excluded — handled by separate effect
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [directionsResult, routesLib, map]);
 
-  // Sadece rota seçimi değişince index güncelle
   useEffect(() => {
     if (!rendererRef.current) return;
     rendererRef.current.setRouteIndex(selectedRouteIndex);
@@ -97,18 +145,13 @@ export default function MapContent({
         <AdvancedMarker
           key={radar.id}
           position={{ lat: radar.lat, lng: radar.lng }}
-          title={radar.maxspeed ? `${radar.maxspeed} km/h` : "Radar"}
+          title={
+            `${TYPE_STYLE[radar.type].emoji} ` +
+            (radar.name ? `${radar.name} · ` : "") +
+            (radar.maxspeed ? `${radar.maxspeed} km/h` : radar.type)
+          }
         >
-          <div className="relative flex items-center justify-center">
-            <div className="w-6 h-6 bg-red-600 rounded-full border-2 border-white shadow-md flex items-center justify-center">
-              <span className="text-white text-[10px] leading-none">📷</span>
-            </div>
-            {radar.maxspeed && (
-              <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 bg-red-700 text-white text-[8px] font-bold px-1 rounded whitespace-nowrap">
-                {radar.maxspeed}
-              </div>
-            )}
-          </div>
+          <RadarMarker radar={radar} />
         </AdvancedMarker>
       ))}
 

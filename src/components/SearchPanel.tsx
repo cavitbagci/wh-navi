@@ -4,7 +4,7 @@ import { useMapsLibrary } from "@vis.gl/react-google-maps";
 import AppLogo from "./AppLogo";
 
 interface Props {
-  onRouteFound: (result: google.maps.DirectionsResult) => void;
+  onRouteFound: (result: google.maps.DirectionsResult, destination: google.maps.LatLng) => void;
   onClear: () => void;
   hasRoute: boolean;
 }
@@ -57,20 +57,17 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        const latlng = new google.maps.LatLng(
-          pos.coords.latitude,
-          pos.coords.longitude
-        );
+        const latlng = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
         const geocoder = new google.maps.Geocoder();
         geocoder.geocode({ location: latlng }, (results, status) => {
           setLocating(null);
           if (status === "OK" && results?.[0]) {
             const place = results[0];
             if (field === "origin") {
-              if (originRef.current) originRef.current.value = place.formatted_address;
+              if (originRef.current) originRef.current.value = place.formatted_address ?? "";
               originPlaceRef.current = place;
             } else {
-              if (destRef.current) destRef.current.value = place.formatted_address;
+              if (destRef.current) destRef.current.value = place.formatted_address ?? "";
               destPlaceRef.current = place;
             }
           } else {
@@ -109,7 +106,7 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
         region: "tr",
         language: "tr",
       });
-      onRouteFound(result);
+      onRouteFound(result, destination);
       setIsExpanded(false);
     } catch {
       setError("Rota bulunamadı. Lütfen adresleri kontrol edin.");
