@@ -7,6 +7,7 @@ import RoutePanel from "./RoutePanel";
 import RadarAlert from "./RadarAlert";
 import NavigationBar from "./NavigationBar";
 import SpeedDisplay from "./SpeedDisplay";
+import DisclaimerModal from "./DisclaimerModal";
 import {
   haversineDistance,
   distanceToPath,
@@ -286,6 +287,9 @@ export default function NavigationApp() {
         />
       </Map>
 
+      {/* First-visit disclaimer */}
+      <DisclaimerModal />
+
       {/* Navigation top bar */}
       {navigating && currentStep && (
         <NavigationBar
@@ -305,29 +309,47 @@ export default function NavigationApp() {
 
       {/* Rerouting indicator */}
       {rerouting && (
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-40 bg-gray-900/95 backdrop-blur-md border border-gray-700 rounded-2xl px-6 py-4 flex items-center gap-3 shadow-2xl">
-          <span className="inline-block w-5 h-5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-          <span className="text-white text-sm font-semibold">Rota yeniden hesaplanıyor…</span>
+        <div
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-40 flex items-center gap-3 rounded-2xl px-6 py-4 shadow-2xl"
+          style={{
+            background: "rgba(10,16,30,0.97)",
+            border: "1px solid rgba(255,255,255,0.1)",
+            backdropFilter: "blur(20px)",
+            WebkitBackdropFilter: "blur(20px)",
+          }}
+        >
+          <span className="inline-block w-5 h-5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+          <span className="text-white text-sm font-semibold whitespace-nowrap">Rota yeniden hesaplanıyor…</span>
         </div>
       )}
 
       {/* Zoom hint */}
       {radarsLoaded && mapZoom < 10 && !navigating && routes.length === 0 && (
         <div
-          className="absolute left-1/2 -translate-x-1/2 z-20 bg-gray-900/90 backdrop-blur-sm text-gray-300 text-xs px-4 py-2 rounded-full border border-gray-700/50 whitespace-nowrap"
-          style={{ bottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
+          className="absolute left-1/2 -translate-x-1/2 z-20 text-slate-400 text-xs px-4 py-2 rounded-full whitespace-nowrap"
+          style={{
+            bottom: "max(1.5rem, env(safe-area-inset-bottom))",
+            background: "rgba(10,16,30,0.88)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            backdropFilter: "blur(12px)",
+            WebkitBackdropFilter: "blur(12px)",
+          }}
         >
-          📷 Radar noktalarını görmek için yakınlaştır
+          Radar noktalarını görmek için yakınlaştır
         </div>
       )}
 
-      {/* Radar legend + count */}
+      {/* Radar count */}
       {radarsLoaded && mapZoom >= 10 && routes.length === 0 && (
         <div
-          className="absolute right-4 z-20 bg-gray-900/90 backdrop-blur-sm text-gray-400 text-xs px-3 py-1.5 rounded-full border border-gray-700/50"
-          style={{ bottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
+          className="absolute right-14 z-20 text-slate-500 text-xs px-3 py-1.5 rounded-full"
+          style={{
+            bottom: "max(1.5rem, env(safe-area-inset-bottom))",
+            background: "rgba(10,16,30,0.85)",
+            border: "1px solid rgba(255,255,255,0.07)",
+          }}
         >
-          📷 {radars.length} nokta
+          {radars.length} radar
         </div>
       )}
 
@@ -362,21 +384,37 @@ export default function NavigationApp() {
         >
           <button
             onClick={stopNavigation}
-            className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-2xl shadow-2xl transition-colors flex items-center justify-center gap-2"
+            className="w-full text-white font-bold text-sm rounded-2xl shadow-2xl flex items-center justify-center gap-2.5 active:opacity-80 transition-opacity"
+            style={{
+              height: 52,
+              background: "linear-gradient(135deg, #DC2626, #EF4444)",
+              boxShadow: "0 4px 20px rgba(239,68,68,0.35)",
+            }}
           >
-            <span>■</span>
-            <span>Navigasyonu Durdur</span>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <rect width="12" height="12" rx="2" fill="white" />
+            </svg>
+            Navigasyonu Durdur
           </button>
         </div>
       )}
 
-      {/* Radar alert */}
+      {/* Radar alert — positioned below nav bar when navigating */}
       {nearbyRadar && (
-        <RadarAlert
-          distance={nearbyRadar.distance}
-          maxspeed={nearbyRadar.radar.maxspeed}
-          type={nearbyRadar.radar.type}
-        />
+        <div
+          className="absolute left-4 right-4 z-30 max-w-md mx-auto"
+          style={{
+            top: navigating
+              ? "calc(env(safe-area-inset-top) + 130px)"
+              : 88,
+          }}
+        >
+          <RadarAlert
+            distance={nearbyRadar.distance}
+            maxspeed={nearbyRadar.radar.maxspeed}
+            type={nearbyRadar.radar.type}
+          />
+        </div>
       )}
     </div>
   );
