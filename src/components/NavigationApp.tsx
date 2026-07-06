@@ -23,10 +23,14 @@ interface RouteInfo {
   distance: string;
 }
 
-// Off-route threshold: more than this meters from the route polyline → reroute
-const OFF_ROUTE_THRESHOLD = 60;
-// Minimum seconds between automatic reroutes
-const REROUTE_COOLDOWN = 15;
+const OFF_ROUTE_THRESHOLD = 30;   // metres from route polyline before rerouting
+const REROUTE_COOLDOWN = 15;       // seconds between auto-reroutes
+const MAX_REROUTES_PER_SESSION = 10; // hard cap — stops runaway API calls if GPS goes haywire
+
+// Bounding-box half-widths for radar proximity pre-filter (~500 m)
+// Cheap absolute-value check eliminates ~99% of radars before haversine runs
+const RADAR_LAT_BOX = 0.0045; // 500 m in latitude  (1° ≈ 111 km)
+const RADAR_LNG_BOX = 0.0060; // 500 m in longitude at ~39°N (cos 39° ≈ 0.78)
 
 export default function NavigationApp() {
   const routesLib = useMapsLibrary("routes");
@@ -53,10 +57,12 @@ export default function NavigationApp() {
 
   // Rerouting state
   const [rerouting, setRerouting] = useState(false);
+  const [rerouteLimitHit, setRerouteLimitHit] = useState(false);
 
   const watchIdRef = useRef<number | null>(null);
   const alertCooldownRef = useRef<number>(0);
   const rerouteTimeRef = useRef<number>(0);
+  const rerouteCountRef = useRef<number>(0);
   // Cached flat path of current route for off-route checks
   const routePathRef = useRef<{ lat: number; lng: number }[]>([]);
   // Destination kept for rerouting
@@ -113,9 +119,17 @@ export default function NavigationApp() {
     if (!userPos) return;
 
     // ── Radar proximity alert ──────────────────────────────────────────────
+    // Two-phase filter: cheap bbox check first, haversine only on candidates.
+    // For 2000 radars this reduces haversine calls from ~2000 to ~0–5 per update.
     if (radars.length > 0) {
       let closest: { radar: RadarPoint; distance: number } | null = null;
+      const { lat, lng } = userPos;
       for (const radar of radars) {
+        // Phase 1: axis-aligned bounding box (just subtraction + comparison)
+        if (Math.abs(radar.lat - lat) > RADAR_LAT_BOX) continue;
+        if (Math.abs(radar.lng - lng) > RADAR_LNG_BOX) continue;
+
+        // Phase 2: accurate haversine (only runs for ~0–5 nearby radars)
         const dist = haversineDistance(userPos, radar);
         if (dist > 500) continue;
 
@@ -163,8 +177,15 @@ export default function NavigationApp() {
     const distToRoute = distanceToPath(userPos, routePathRef.current);
     if (distToRoute <= OFF_ROUTE_THRESHOLD) return;
 
+    // Hard cap — stop auto-rerouting to protect API quota
+    if (rerouteCountRef.current >= MAX_REROUTES_PER_SESSION) {
+      setRerouteLimitHit(true);
+      return;
+    }
+
     // User is off-route — recalculate from current position
     setRerouting(true);
+    rerouteCountRef.current += 1;
     const origin = new google.maps.LatLng(userPos.lat, userPos.lng);
     const destination = destRef.current;
 
@@ -174,7 +195,8 @@ export default function NavigationApp() {
         origin,
         destination,
         travelMode: google.maps.TravelMode.DRIVING,
-        provideRouteAlternatives: true,
+        // No alternatives on reroute — we just need the single best route from here
+        provideRouteAlternatives: false,
         region: "tr",
         language: "tr",
       })
@@ -190,6 +212,9 @@ export default function NavigationApp() {
   const startNavigation = useCallback(() => {
     setNavigating(true);
     setCurrentStepIndex(0);
+    setRerouteLimitHit(false);
+    rerouteCountRef.current = 0;
+    rerouteTimeRef.current = 0;
     if (!navigator.geolocation) return;
     watchIdRef.current = navigator.geolocation.watchPosition(
       handlePosition,
@@ -205,6 +230,8 @@ export default function NavigationApp() {
     setCurrentSpeed(null);
     setUserHeading(null);
     setRerouting(false);
+    setRerouteLimitHit(false);
+    rerouteCountRef.current = 0;
     if (watchIdRef.current !== null) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
@@ -305,6 +332,35 @@ export default function NavigationApp() {
       {/* Speedometer (shown during navigation) */}
       {navigating && (
         <SpeedDisplay speedKmh={currentSpeed} speedLimit={nearbySpeedLimit} />
+      )}
+
+      {/* Reroute limit banner */}
+      {rerouteLimitHit && navigating && !rerouting && (
+        <div
+          className="absolute left-4 right-4 z-30 max-w-md mx-auto"
+          style={{
+            top: "calc(env(safe-area-inset-top) + 130px)",
+          }}
+        >
+          <div
+            className="flex items-center gap-3 rounded-2xl px-4 py-3"
+            style={{
+              background: "rgba(120,53,15,0.97)",
+              border: "1px solid rgba(252,211,77,0.3)",
+              backdropFilter: "blur(16px)",
+              WebkitBackdropFilter: "blur(16px)",
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="flex-shrink-0">
+              <path d="M12 9v4M12 17h.01" stroke="#FCD34D" strokeWidth="2" strokeLinecap="round"/>
+              <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
+                stroke="#FCD34D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            <p className="text-amber-200 text-xs font-medium flex-1">
+              Otomatik rota güncelleme devre dışı. Durdurup yeniden başlatabilirsin.
+            </p>
+          </div>
+        </div>
       )}
 
       {/* Rerouting indicator */}

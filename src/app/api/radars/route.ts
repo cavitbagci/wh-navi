@@ -69,7 +69,7 @@ node["enforcement"~"^(maxspeed|speed|traffic_signals|average_speed|check)$"](35.
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       Accept: "application/json",
-      "User-Agent": "wh-navi/1.0 (navigation app; contact: cavit.bagci04@gmail.com)",
+      "User-Agent": `wh-navi/1.0 (navigation app${process.env.OVERPASS_CONTACT ? `; contact: ${process.env.OVERPASS_CONTACT}` : ""})`,
     },
     body: `data=${encodeURIComponent(query)}`,
     signal: AbortSignal.timeout(50000),
