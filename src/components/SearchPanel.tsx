@@ -34,40 +34,132 @@ function SwapIcon() {
   );
 }
 
+function ToggleChip({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1.5 text-xs font-medium rounded-full transition-all"
+      style={{
+        paddingLeft: 10,
+        paddingRight: 10,
+        height: 28,
+        background: active ? "rgba(59,130,246,0.2)" : "rgba(255,255,255,0.05)",
+        border: active ? "1px solid rgba(59,130,246,0.5)" : "1px solid rgba(255,255,255,0.08)",
+        color: active ? "#93C5FD" : "#64748B",
+      }}
+    >
+      {active && (
+        <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+          <path d="M2 6l3 3 5-5" stroke="#93C5FD" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )}
+      {label}
+    </button>
+  );
+}
+
 export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) {
   const placesLib = useMapsLibrary("places");
   const routesLib = useMapsLibrary("routes");
   const originRef = useRef<HTMLInputElement>(null);
   const destRef = useRef<HTMLInputElement>(null);
+
+  // Keep refs to Autocomplete widgets so we can update their bias later
+  const originACRef = useRef<google.maps.places.Autocomplete | null>(null);
+  const destACRef = useRef<google.maps.places.Autocomplete | null>(null);
+
   const originPlaceRef = useRef<google.maps.places.PlaceResult | null>(null);
   const destPlaceRef = useRef<google.maps.places.PlaceResult | null>(null);
+
   const [loading, setLoading] = useState(false);
   const [locating, setLocating] = useState<Field | null>(null);
   const [error, setError] = useState("");
   const [isExpanded, setIsExpanded] = useState(true);
 
+  // Route options
+  const [avoidHighways, setAvoidHighways] = useState(false);
+  const [avoidTolls, setAvoidTolls] = useState(false);
+
+  // User position for autocomplete bias — fetched silently once on mount
+  const [biasPos, setBiasPos] = useState<google.maps.LatLng | null>(null);
+
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setBiasPos(
+          new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude)
+        );
+      },
+      () => {}, // silent fail — bias is optional
+      { timeout: 5000, maximumAge: 60000 }
+    );
+  }, []);
+
+  // When location becomes known, update both autocomplete widgets with a bias box.
+  // strictBounds: false → still returns results outside the box (e.g. distant cities),
+  // but ranks nearby results first.
+  useEffect(() => {
+    if (!biasPos) return;
+    const delta = 0.45; // ~50 km in each direction
+    const deltaLng = 0.6;
+    const bounds = new google.maps.LatLngBounds(
+      { lat: biasPos.lat() - delta, lng: biasPos.lng() - deltaLng },
+      { lat: biasPos.lat() + delta, lng: biasPos.lng() + deltaLng }
+    );
+    originACRef.current?.setOptions({ bounds, strictBounds: false });
+    destACRef.current?.setOptions({ bounds, strictBounds: false });
+  }, [biasPos]);
+
+  // Create Autocomplete widgets — session tokens are managed automatically by the widget
   useEffect(() => {
     if (!placesLib || !originRef.current || !destRef.current) return;
 
-    const opts: google.maps.places.AutocompleteOptions = {
+    const baseOpts: google.maps.places.AutocompleteOptions = {
       componentRestrictions: { country: "tr" },
       fields: ["geometry", "name", "formatted_address"],
     };
 
-    const originAC = new placesLib.Autocomplete(originRef.current, opts);
+    const originAC = new placesLib.Autocomplete(originRef.current, baseOpts);
     originAC.addListener("place_changed", () => {
       originPlaceRef.current = originAC.getPlace();
     });
+    originACRef.current = originAC;
 
-    const destAC = new placesLib.Autocomplete(destRef.current, opts);
+    const destAC = new placesLib.Autocomplete(destRef.current, baseOpts);
     destAC.addListener("place_changed", () => {
       destPlaceRef.current = destAC.getPlace();
     });
+    destACRef.current = destAC;
+
+    // If we already have a bias position, apply it immediately
+    if (biasPos) {
+      const delta = 0.45;
+      const deltaLng = 0.6;
+      const bounds = new google.maps.LatLngBounds(
+        { lat: biasPos.lat() - delta, lng: biasPos.lng() - deltaLng },
+        { lat: biasPos.lat() + delta, lng: biasPos.lng() + deltaLng }
+      );
+      originAC.setOptions({ bounds, strictBounds: false });
+      destAC.setOptions({ bounds, strictBounds: false });
+    }
 
     return () => {
       google.maps.event.clearInstanceListeners(originAC);
       google.maps.event.clearInstanceListeners(destAC);
+      originACRef.current = null;
+      destACRef.current = null;
     };
+    // biasPos intentionally excluded — the separate effect handles updates
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [placesLib]);
 
   const useMyLocation = (field: Field) => {
@@ -81,6 +173,10 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const latlng = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
+
+        // Also update autocomplete bias with the fresh position
+        setBiasPos(latlng);
+
         const geocoder = new google.maps.Geocoder();
         geocoder.geocode({ location: latlng }, (results, status) => {
           setLocating(null);
@@ -136,6 +232,13 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
         destination,
         travelMode: google.maps.TravelMode.DRIVING,
         provideRouteAlternatives: true,
+        avoidHighways,
+        avoidTolls,
+        // Real-time traffic data — gives more realistic route durations and alternatives
+        drivingOptions: {
+          departureTime: new Date(),
+          trafficModel: google.maps.TrafficModel.BEST_GUESS,
+        },
         region: "tr",
         language: "tr",
       });
@@ -155,6 +258,8 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
     destPlaceRef.current = null;
     setError("");
     setIsExpanded(true);
+    setAvoidHighways(false);
+    setAvoidTolls(false);
     onClear();
   };
 
@@ -198,25 +303,22 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
             }}
           >
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-              <path d="M2 4L6 8L10 4" stroke="#94A3B8" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M2 4L6 8L10 4" stroke="#94A3B8" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </div>
         </button>
 
         {/* Form */}
         {isExpanded && (
-          <div className="px-4 pb-4 space-y-1.5">
-            {/* Inputs container with swap button */}
+          <div className="px-4 pb-4 space-y-2">
+            {/* Inputs */}
             <div className="relative">
               {/* Origin */}
               <div
                 className="flex items-center gap-3 px-3 rounded-xl"
                 style={{ background: inputBg, border, height: 48 }}
               >
-                <div
-                  className="flex-shrink-0 rounded-full"
-                  style={{ width: 9, height: 9, background: "#22C55E" }}
-                />
+                <div className="flex-shrink-0 rounded-full" style={{ width: 9, height: 9, background: "#22C55E" }} />
                 <input
                   ref={originRef}
                   placeholder="Başlangıç noktası"
@@ -241,7 +343,7 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
                 </button>
               </div>
 
-              {/* Divider with swap button */}
+              {/* Swap */}
               <div className="flex items-center my-0.5 relative" style={{ height: 24 }}>
                 <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)", marginLeft: 16 }} />
                 <button
@@ -266,10 +368,7 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
                 className="flex items-center gap-3 px-3 rounded-xl"
                 style={{ background: inputBg, border, height: 48 }}
               >
-                <div
-                  className="flex-shrink-0 rounded-full"
-                  style={{ width: 9, height: 9, background: "#EF4444" }}
-                />
+                <div className="flex-shrink-0 rounded-full" style={{ width: 9, height: 9, background: "#EF4444" }} />
                 <input
                   ref={destRef}
                   placeholder="Varış noktası"
@@ -295,20 +394,30 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
               </div>
             </div>
 
-            {error && (
-              <p className="text-red-400 text-xs px-1 pt-0.5">{error}</p>
-            )}
+            {/* Route options */}
+            <div className="flex items-center gap-2 pt-0.5">
+              <ToggleChip
+                active={avoidHighways}
+                onClick={() => setAvoidHighways((v) => !v)}
+                label="Otoyol kaçın"
+              />
+              <ToggleChip
+                active={avoidTolls}
+                onClick={() => setAvoidTolls((v) => !v)}
+                label="Ücretli kaçın"
+              />
+            </div>
 
-            <div className="flex gap-2 pt-1">
+            {error && <p className="text-red-400 text-xs px-1">{error}</p>}
+
+            <div className="flex gap-2 pt-0.5">
               <button
                 onClick={handleRoute}
                 disabled={loading}
                 className="flex-1 text-white font-semibold text-sm rounded-xl transition-opacity disabled:opacity-50 flex items-center justify-center gap-2"
                 style={{
                   height: 46,
-                  background: loading
-                    ? "#2563EB"
-                    : "linear-gradient(135deg, #2563EB, #3B82F6)",
+                  background: loading ? "#2563EB" : "linear-gradient(135deg, #2563EB, #3B82F6)",
                   boxShadow: "0 4px 16px rgba(59,130,246,0.3)",
                 }}
               >
@@ -320,7 +429,7 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
                 ) : (
                   <>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-                      <path d="M3 12L21 12M21 12L14 5M21 12L14 19" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M3 12L21 12M21 12L14 5M21 12L14 19" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
                     <span>Rota Bul</span>
                   </>
