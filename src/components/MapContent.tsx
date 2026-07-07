@@ -14,6 +14,7 @@ interface Props {
   directionsResult: google.maps.DirectionsResult | null;
   selectedRouteIndex: number;
   navigating: boolean;
+  userHeading: number | null;
 }
 
 const TYPE_STYLE: Record<
@@ -57,19 +58,27 @@ function RadarMarker({ radar }: { radar: RadarPoint }) {
   );
 }
 
-// Location/center icon — Google Maps style
 function LocationIcon({ active }: { active: boolean }) {
   return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      {/* Crosshair lines */}
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
       <line x1="12" y1="2"  x2="12" y2="5"  stroke={active ? "#3B82F6" : "white"} strokeWidth="2" strokeLinecap="round"/>
       <line x1="12" y1="19" x2="12" y2="22" stroke={active ? "#3B82F6" : "white"} strokeWidth="2" strokeLinecap="round"/>
       <line x1="2"  y1="12" x2="5"  y2="12" stroke={active ? "#3B82F6" : "white"} strokeWidth="2" strokeLinecap="round"/>
       <line x1="19" y1="12" x2="22" y2="12" stroke={active ? "#3B82F6" : "white"} strokeWidth="2" strokeLinecap="round"/>
-      {/* Outer circle */}
       <circle cx="12" cy="12" r="7" stroke={active ? "#3B82F6" : "white"} strokeWidth="1.5" fill="none"/>
-      {/* Inner dot */}
       <circle cx="12" cy="12" r="2.5" fill={active ? "#3B82F6" : "white"}/>
+    </svg>
+  );
+}
+
+function TrafficIcon({ active }: { active: boolean }) {
+  const c = active ? "#22C55E" : "white";
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+      <rect x="8" y="2" width="8" height="20" rx="3" stroke={c} strokeWidth="1.8"/>
+      <circle cx="12" cy="7"  r="2" fill={active ? "#EF4444" : "rgba(255,255,255,0.35)"}/>
+      <circle cx="12" cy="12" r="2" fill={active ? "#F59E0B" : "rgba(255,255,255,0.35)"}/>
+      <circle cx="12" cy="17" r="2" fill={active ? "#22C55E" : "rgba(255,255,255,0.35)"}/>
     </svg>
   );
 }
@@ -80,15 +89,16 @@ export default function MapContent({
   directionsResult,
   selectedRouteIndex,
   navigating,
+  userHeading,
 }: Props) {
   const map = useMap();
   const routesLib = useMapsLibrary("routes");
   const rendererRef = useRef<google.maps.DirectionsRenderer | null>(null);
   const traveledPolyRef = useRef<google.maps.Polyline | null>(null);
+  const trafficLayerRef = useRef<google.maps.TrafficLayer | null>(null);
 
-  // autoFollow: map follows user during nav; disabled when user manually drags
   const [autoFollow, setAutoFollow] = useState(true);
-
+  const [trafficVisible, setTrafficVisible] = useState(false);
   const [zoom, setZoom] = useState(6);
   const [bounds, setBounds] = useState<google.maps.LatLngBounds | null>(null);
 
@@ -116,6 +126,31 @@ export default function MapContent({
     setAutoFollow(true);
   }, [navigating, directionsResult]);
 
+  // Traffic layer — create/destroy based on toggle
+  useEffect(() => {
+    if (!map) return;
+    if (trafficVisible) {
+      if (!trafficLayerRef.current) {
+        trafficLayerRef.current = new google.maps.TrafficLayer();
+      }
+      trafficLayerRef.current.setMap(map);
+    } else {
+      trafficLayerRef.current?.setMap(null);
+    }
+  }, [map, trafficVisible]);
+
+  // Heading lock — rotate map to match driving direction when auto-following
+  useEffect(() => {
+    if (!map) return;
+    if (!navigating || !autoFollow) {
+      map.setHeading(0);
+      return;
+    }
+    if (userHeading != null) {
+      map.setHeading(userHeading);
+    }
+  }, [map, navigating, autoFollow, userHeading]);
+
   // Center button handler
   const handleCenter = useCallback(() => {
     if (!map || !userPos) return;
@@ -127,10 +162,8 @@ export default function MapContent({
   // DirectionsRenderer — recreate on route change
   useEffect(() => {
     if (!routesLib || !map) return;
-
     rendererRef.current?.setMap(null);
     rendererRef.current = null;
-
     if (!directionsResult) return;
 
     const renderer = new routesLib.DirectionsRenderer({
@@ -157,13 +190,11 @@ export default function MapContent({
     rendererRef.current?.setRouteIndex(selectedRouteIndex);
   }, [selectedRouteIndex]);
 
-  // Gray "traveled" polyline — create when nav starts, destroy when nav stops
+  // Gray "traveled" polyline
   useEffect(() => {
     if (!map) return;
-
     traveledPolyRef.current?.setMap(null);
     traveledPolyRef.current = null;
-
     if (!navigating || !directionsResult) return;
 
     traveledPolyRef.current = new google.maps.Polyline({
@@ -206,7 +237,7 @@ export default function MapContent({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigating]);
 
-  // Auto-follow: pan to user on each GPS update (if auto-follow is on)
+  // Auto-follow: pan to user on each GPS update
   useEffect(() => {
     if (!map || !userPos || !navigating || !autoFollow) return;
     map.panTo(userPos);
@@ -219,14 +250,27 @@ export default function MapContent({
       .slice(0, MAX_VISIBLE);
   }, [radars, zoom, bounds]);
 
-  // Bottom offset for center button: stays above stop-nav button during nav
   const btnBottom = navigating
     ? "calc(max(1rem, env(safe-area-inset-bottom)) + 4.5rem)"
     : "max(1.5rem, env(safe-area-inset-bottom))";
 
+  const circleBtnStyle = (highlight?: string): React.CSSProperties => ({
+    width: 44,
+    height: 44,
+    borderRadius: "50%",
+    background: "rgba(10,16,30,0.96)",
+    border: `1.5px solid ${highlight ?? "rgba(75,85,99,0.5)"}`,
+    boxShadow: "0 2px 10px rgba(0,0,0,0.45)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    transition: "border-color 0.2s",
+  });
+
   return (
     <>
-      {/* ── Radar markers ── */}
+      {/* Radar markers */}
       {visibleRadars.map((radar) => (
         <AdvancedMarker
           key={radar.id}
@@ -241,64 +285,51 @@ export default function MapContent({
         </AdvancedMarker>
       ))}
 
-      {/* ── User position dot ── */}
+      {/* User position dot */}
       {userPos && (
         <AdvancedMarker position={userPos} title="Konumunuz">
           <div style={{ position: "relative", width: 24, height: 24, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <div
               className="animate-ping"
-              style={{
-                position: "absolute",
-                width: 24, height: 24,
-                borderRadius: "50%",
-                background: "rgba(59,130,246,0.4)",
-              }}
+              style={{ position: "absolute", width: 24, height: 24, borderRadius: "50%", background: "rgba(59,130,246,0.4)" }}
             />
-            <div style={{
-              width: 14, height: 14,
-              borderRadius: "50%",
-              background: "#3B82F6",
-              border: "2px solid white",
-              boxShadow: "0 2px 6px rgba(0,0,0,0.5)",
-              position: "relative",
-            }} />
+            <div style={{ width: 14, height: 14, borderRadius: "50%", background: "#3B82F6", border: "2px solid white", boxShadow: "0 2px 6px rgba(0,0,0,0.5)", position: "relative" }} />
           </div>
         </AdvancedMarker>
       )}
 
-      {/* ── Center / locate button ── */}
-      {userPos && (
-        <div
-          style={{
-            position: "absolute",
-            right: 12,
-            bottom: btnBottom,
-            zIndex: 20,
-          }}
+      {/* Button column — right side */}
+      <div
+        style={{
+          position: "absolute",
+          right: 12,
+          bottom: btnBottom,
+          zIndex: 20,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        }}
+      >
+        {/* Traffic layer toggle */}
+        <button
+          onClick={() => setTrafficVisible((v) => !v)}
+          title={trafficVisible ? "Trafiği gizle" : "Trafiği göster"}
+          style={circleBtnStyle(trafficVisible ? "#22C55E" : undefined)}
         >
+          <TrafficIcon active={trafficVisible} />
+        </button>
+
+        {/* Center / locate */}
+        {userPos && (
           <button
             onClick={handleCenter}
             title={autoFollow && navigating ? "Takip ediliyor" : "Konumuma git"}
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: "50%",
-              background: "rgba(17,24,39,0.96)",
-              border: autoFollow && navigating
-                ? "1.5px solid #3B82F6"
-                : "1.5px solid rgba(75,85,99,0.6)",
-              boxShadow: "0 2px 10px rgba(0,0,0,0.45)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              cursor: "pointer",
-              transition: "border-color 0.2s",
-            }}
+            style={circleBtnStyle(autoFollow && navigating ? "#3B82F6" : undefined)}
           >
             <LocationIcon active={autoFollow && navigating} />
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </>
   );
 }

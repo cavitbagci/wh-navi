@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMapsLibrary } from "@vis.gl/react-google-maps";
 import AppLogo from "./AppLogo";
 
@@ -11,12 +11,50 @@ interface Props {
 
 type Field = "origin" | "dest";
 
+// ── Recent places ──────────────────────────────────────────────────────────────
+
+interface RecentPlace {
+  name: string;
+  address: string;
+  lat: number;
+  lng: number;
+}
+
+const RECENT_KEY = "wh-navi-recent-v1";
+const MAX_RECENT = 8;
+
+function loadRecent(): RecentPlace[] {
+  try { return JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]"); } catch { return []; }
+}
+
+function saveRecent(p: RecentPlace) {
+  const list = loadRecent().filter((r) => r.address !== p.address);
+  localStorage.setItem(RECENT_KEY, JSON.stringify([p, ...list].slice(0, MAX_RECENT)));
+}
+
+function placeToRecent(place: google.maps.places.PlaceResult): RecentPlace | null {
+  const loc = place.geometry?.location;
+  if (!loc || !place.formatted_address) return null;
+  return {
+    name: place.name ?? place.formatted_address,
+    address: place.formatted_address,
+    lat: loc.lat(),
+    lng: loc.lng(),
+  };
+}
+
+function recentToFakePlace(r: RecentPlace): google.maps.places.PlaceResult {
+  return {
+    geometry: { location: new google.maps.LatLng(r.lat, r.lng) },
+    name: r.name,
+    formatted_address: r.address,
+  };
+}
+
+// ── Icons ──────────────────────────────────────────────────────────────────────
+
 function GpsIcon({ spinning }: { spinning?: boolean }) {
-  if (spinning) {
-    return (
-      <span className="inline-block w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-    );
-  }
+  if (spinning) return <span className="inline-block w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />;
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
       <circle cx="12" cy="12" r="4" stroke="currentColor" strokeWidth="2" />
@@ -34,23 +72,23 @@ function SwapIcon() {
   );
 }
 
-function ToggleChip({
-  active,
-  onClick,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-}) {
+function HistoryIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+      <path d="M3 12a9 9 0 109-9H3" stroke="#64748B" strokeWidth="1.8" strokeLinecap="round"/>
+      <path d="M3 7v5h5" stroke="#64748B" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M12 7v5l3 3" stroke="#64748B" strokeWidth="1.8" strokeLinecap="round"/>
+    </svg>
+  );
+}
+
+function ToggleChip({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
   return (
     <button
       onClick={onClick}
       className="flex items-center gap-1.5 text-xs font-medium rounded-full transition-all"
       style={{
-        paddingLeft: 10,
-        paddingRight: 10,
-        height: 28,
+        paddingLeft: 10, paddingRight: 10, height: 28,
         background: active ? "rgba(59,130,246,0.2)" : "rgba(255,255,255,0.05)",
         border: active ? "1px solid rgba(59,130,246,0.5)" : "1px solid rgba(255,255,255,0.08)",
         color: active ? "#93C5FD" : "#64748B",
@@ -58,7 +96,7 @@ function ToggleChip({
     >
       {active && (
         <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
-          <path d="M2 6l3 3 5-5" stroke="#93C5FD" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M2 6l3 3 5-5" stroke="#93C5FD" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
         </svg>
       )}
       {label}
@@ -66,16 +104,110 @@ function ToggleChip({
   );
 }
 
+// ── WaypointInput — self-contained Autocomplete for one intermediate stop ─────
+
+interface WaypointInputProps {
+  index: number;
+  placesLib: google.maps.PlacesLibrary | null;
+  biasPos: google.maps.LatLng | null;
+  onPlaceChange: (place: google.maps.places.PlaceResult | null) => void;
+  onRemove: () => void;
+}
+
+function WaypointInput({ index, placesLib, biasPos, onPlaceChange, onRemove }: WaypointInputProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const acRef = useRef<google.maps.places.Autocomplete | null>(null);
+  // Keep onPlaceChange stable in the listener via ref
+  const cbRef = useRef(onPlaceChange);
+  cbRef.current = onPlaceChange;
+
+  useEffect(() => {
+    if (!placesLib || !inputRef.current) return;
+    const ac = new placesLib.Autocomplete(inputRef.current, {
+      componentRestrictions: { country: "tr" },
+      fields: ["geometry", "name", "formatted_address"],
+    });
+    ac.addListener("place_changed", () => cbRef.current(ac.getPlace()));
+    acRef.current = ac;
+    return () => {
+      google.maps.event.clearInstanceListeners(ac);
+      acRef.current = null;
+    };
+  }, [placesLib]);
+
+  useEffect(() => {
+    if (!biasPos || !acRef.current) return;
+    acRef.current.setOptions({
+      bounds: new google.maps.LatLngBounds(
+        { lat: biasPos.lat() - 0.45, lng: biasPos.lng() - 0.6 },
+        { lat: biasPos.lat() + 0.45, lng: biasPos.lng() + 0.6 }
+      ),
+      strictBounds: false,
+    });
+  }, [biasPos]);
+
+  return (
+    <div
+      className="flex items-center gap-3 px-3 rounded-xl"
+      style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", height: 48 }}
+    >
+      <div className="flex-shrink-0 rounded" style={{ width: 9, height: 9, background: "#A78BFA" }} />
+      <input
+        ref={inputRef}
+        placeholder={`Ara durak ${index + 1}`}
+        style={{ flex: 1, background: "transparent", color: "#F1F5F9", fontSize: 14, outline: "none", border: "none", minWidth: 0 }}
+        className="placeholder-slate-500"
+      />
+      <button onClick={onRemove} className="flex-shrink-0 text-slate-500 hover:text-red-400 transition-colors">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M1 1l12 12M13 1L1 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+        </svg>
+      </button>
+    </div>
+  );
+}
+
+// ── RecentDropdown ────────────────────────────────────────────────────────────
+
+function RecentDropdown({ items, onSelect }: { items: RecentPlace[]; onSelect: (p: RecentPlace) => void }) {
+  if (items.length === 0) return null;
+  return (
+    <div
+      className="absolute left-0 right-0 z-50 rounded-xl overflow-hidden shadow-2xl"
+      style={{
+        top: "calc(100% + 4px)",
+        background: "rgba(10,16,30,0.99)",
+        border: "1px solid rgba(255,255,255,0.09)",
+      }}
+    >
+      <div className="flex items-center gap-2 px-3 py-2" style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+        <HistoryIcon />
+        <span className="text-slate-500 text-xs font-medium">Son Aramalar</span>
+      </div>
+      {items.map((place, i) => (
+        <button
+          key={i}
+          onMouseDown={() => onSelect(place)}
+          className="w-full flex flex-col items-start px-3 py-2.5 hover:bg-white/5 transition-colors text-left"
+          style={{ borderBottom: i < items.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none" }}
+        >
+          <span className="text-slate-200 text-sm font-medium truncate w-full">{place.name}</span>
+          <span className="text-slate-500 text-xs truncate w-full">{place.address}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ── SearchPanel ───────────────────────────────────────────────────────────────
+
 export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) {
   const placesLib = useMapsLibrary("places");
   const routesLib = useMapsLibrary("routes");
   const originRef = useRef<HTMLInputElement>(null);
   const destRef = useRef<HTMLInputElement>(null);
-
-  // Keep refs to Autocomplete widgets so we can update their bias later
   const originACRef = useRef<google.maps.places.Autocomplete | null>(null);
   const destACRef = useRef<google.maps.places.Autocomplete | null>(null);
-
   const originPlaceRef = useRef<google.maps.places.PlaceResult | null>(null);
   const destPlaceRef = useRef<google.maps.places.PlaceResult | null>(null);
 
@@ -87,39 +219,43 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
   // Route options
   const [avoidHighways, setAvoidHighways] = useState(false);
   const [avoidTolls, setAvoidTolls] = useState(false);
+  const [avoidNorthMarmara, setAvoidNorthMarmara] = useState(false);
 
-  // User position for autocomplete bias — fetched silently once on mount
+  // Intermediate waypoints (max 3)
+  const [waypoints, setWaypoints] = useState<Array<google.maps.places.PlaceResult | null>>([]);
+
+  // Recent searches
+  const [recentPlaces, setRecentPlaces] = useState<RecentPlace[]>([]);
+  const [originFocused, setOriginFocused] = useState(false);
+  const [destFocused, setDestFocused] = useState(false);
+  const [originEmpty, setOriginEmpty] = useState(true);
+  const [destEmpty, setDestEmpty] = useState(true);
+
+  // Autocomplete location bias
   const [biasPos, setBiasPos] = useState<google.maps.LatLng | null>(null);
 
   useEffect(() => {
+    setRecentPlaces(loadRecent());
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setBiasPos(
-          new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude)
-        );
-      },
-      () => {}, // silent fail — bias is optional
+      (pos) => setBiasPos(new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude)),
+      () => {},
       { timeout: 5000, maximumAge: 60000 }
     );
   }, []);
 
-  // When location becomes known, update both autocomplete widgets with a bias box.
-  // strictBounds: false → still returns results outside the box (e.g. distant cities),
-  // but ranks nearby results first.
+  // Update bias on both autocomplete widgets
   useEffect(() => {
     if (!biasPos) return;
-    const delta = 0.45; // ~50 km in each direction
-    const deltaLng = 0.6;
     const bounds = new google.maps.LatLngBounds(
-      { lat: biasPos.lat() - delta, lng: biasPos.lng() - deltaLng },
-      { lat: biasPos.lat() + delta, lng: biasPos.lng() + deltaLng }
+      { lat: biasPos.lat() - 0.45, lng: biasPos.lng() - 0.6 },
+      { lat: biasPos.lat() + 0.45, lng: biasPos.lng() + 0.6 }
     );
     originACRef.current?.setOptions({ bounds, strictBounds: false });
     destACRef.current?.setOptions({ bounds, strictBounds: false });
   }, [biasPos]);
 
-  // Create Autocomplete widgets — session tokens are managed automatically by the widget
+  // Create Autocomplete widgets
   useEffect(() => {
     if (!placesLib || !originRef.current || !destRef.current) return;
 
@@ -130,23 +266,28 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
 
     const originAC = new placesLib.Autocomplete(originRef.current, baseOpts);
     originAC.addListener("place_changed", () => {
-      originPlaceRef.current = originAC.getPlace();
+      const place = originAC.getPlace();
+      originPlaceRef.current = place;
+      setOriginEmpty(false);
+      const r = placeToRecent(place);
+      if (r) { saveRecent(r); setRecentPlaces(loadRecent()); }
     });
     originACRef.current = originAC;
 
     const destAC = new placesLib.Autocomplete(destRef.current, baseOpts);
     destAC.addListener("place_changed", () => {
-      destPlaceRef.current = destAC.getPlace();
+      const place = destAC.getPlace();
+      destPlaceRef.current = place;
+      setDestEmpty(false);
+      const r = placeToRecent(place);
+      if (r) { saveRecent(r); setRecentPlaces(loadRecent()); }
     });
     destACRef.current = destAC;
 
-    // If we already have a bias position, apply it immediately
     if (biasPos) {
-      const delta = 0.45;
-      const deltaLng = 0.6;
       const bounds = new google.maps.LatLngBounds(
-        { lat: biasPos.lat() - delta, lng: biasPos.lng() - deltaLng },
-        { lat: biasPos.lat() + delta, lng: biasPos.lng() + deltaLng }
+        { lat: biasPos.lat() - 0.45, lng: biasPos.lng() - 0.6 },
+        { lat: biasPos.lat() + 0.45, lng: biasPos.lng() + 0.6 }
       );
       originAC.setOptions({ bounds, strictBounds: false });
       destAC.setOptions({ bounds, strictBounds: false });
@@ -158,71 +299,143 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
       originACRef.current = null;
       destACRef.current = null;
     };
-    // biasPos intentionally excluded — the separate effect handles updates
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [placesLib]);
 
-  const useMyLocation = (field: Field) => {
-    if (!navigator.geolocation) {
-      setError("Tarayıcınız konum özelliğini desteklemiyor.");
-      return;
+  const selectRecent = (place: RecentPlace, field: Field) => {
+    const fake = recentToFakePlace(place);
+    if (field === "origin") {
+      if (originRef.current) originRef.current.value = place.name;
+      originPlaceRef.current = fake;
+      setOriginEmpty(false);
+      setOriginFocused(false);
+    } else {
+      if (destRef.current) destRef.current.value = place.name;
+      destPlaceRef.current = fake;
+      setDestEmpty(false);
+      setDestFocused(false);
     }
+  };
+
+  const useMyLocation = (field: Field) => {
+    if (!navigator.geolocation) { setError("Tarayıcınız konum özelliğini desteklemiyor."); return; }
     setLocating(field);
     setError("");
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const latlng = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
-
-        // Also update autocomplete bias with the fresh position
         setBiasPos(latlng);
-
         const geocoder = new google.maps.Geocoder();
         geocoder.geocode({ location: latlng }, (results, status) => {
           setLocating(null);
           if (status === "OK" && results?.[0]) {
             const place = results[0];
+            const fakePlace: google.maps.places.PlaceResult = {
+              geometry: { location: latlng },
+              name: "Mevcut Konum",
+              formatted_address: place.formatted_address,
+            };
             if (field === "origin") {
-              if (originRef.current) originRef.current.value = place.formatted_address ?? "";
-              originPlaceRef.current = place;
+              if (originRef.current) originRef.current.value = "Mevcut Konum";
+              originPlaceRef.current = fakePlace;
+              setOriginEmpty(false);
             } else {
-              if (destRef.current) destRef.current.value = place.formatted_address ?? "";
-              destPlaceRef.current = place;
+              if (destRef.current) destRef.current.value = "Mevcut Konum";
+              destPlaceRef.current = fakePlace;
+              setDestEmpty(false);
             }
           } else {
             setError("Konum adrese çevrilemedi.");
           }
         });
       },
-      () => {
-        setLocating(null);
-        setError("Konum alınamadı. İzin verdiğinizden emin olun.");
-      },
+      () => { setLocating(null); setError("Konum alınamadı. İzin verdiğinizden emin olun."); },
       { enableHighAccuracy: true, timeout: 10000 }
     );
   };
 
   const handleSwap = () => {
-    const originVal = originRef.current?.value ?? "";
-    const destVal = destRef.current?.value ?? "";
-    if (originRef.current) originRef.current.value = destVal;
-    if (destRef.current) destRef.current.value = originVal;
+    const ov = originRef.current?.value ?? "";
+    const dv = destRef.current?.value ?? "";
+    if (originRef.current) originRef.current.value = dv;
+    if (destRef.current) destRef.current.value = ov;
     const tmp = originPlaceRef.current;
     originPlaceRef.current = destPlaceRef.current;
     destPlaceRef.current = tmp;
+    setOriginEmpty(dv === "");
+    setDestEmpty(ov === "");
   };
+
+  const addWaypoint = () => {
+    if (waypoints.length >= 3) return;
+    setWaypoints((prev) => [...prev, null]);
+  };
+
+  const removeWaypoint = (i: number) => {
+    setWaypoints((prev) => prev.filter((_, idx) => idx !== i));
+  };
+
+  const updateWaypoint = useCallback((i: number, place: google.maps.places.PlaceResult | null) => {
+    setWaypoints((prev) => { const n = [...prev]; n[i] = place; return n; });
+  }, []);
+
+  const geocodeText = (text: string): Promise<google.maps.LatLng | null> =>
+    new Promise((resolve) => {
+      new google.maps.Geocoder().geocode(
+        { address: text, region: "tr", language: "tr" },
+        (results, status) => {
+          resolve(status === "OK" && results?.[0]?.geometry?.location
+            ? results[0].geometry.location
+            : null);
+        }
+      );
+    });
 
   const handleRoute = async () => {
     if (!routesLib) return;
     setError("");
 
-    const origin = originPlaceRef.current?.geometry?.location;
-    const destination = destPlaceRef.current?.geometry?.location;
+    let origin = originPlaceRef.current?.geometry?.location ?? null;
+    let destination = destPlaceRef.current?.geometry?.location ?? null;
+
+    // Fallback: geocode typed text if user didn't select from dropdown
+    const originText = originRef.current?.value?.trim();
+    const destText = destRef.current?.value?.trim();
+    if (!origin && originText) {
+      setLoading(true);
+      origin = await geocodeText(originText);
+    }
+    if (!destination && destText) {
+      setLoading(true);
+      destination = await geocodeText(destText);
+    }
 
     if (!origin || !destination) {
+      setLoading(false);
       setError("Lütfen başlangıç ve varış noktası seçin.");
       return;
     }
+
+    // User-defined intermediate stops
+    const userWaypoints: google.maps.DirectionsWaypoint[] = waypoints
+      .filter((p): p is google.maps.places.PlaceResult => p?.geometry?.location != null)
+      .map((p) => ({ location: p.geometry!.location!, stopover: true }));
+
+    // North Marmara bypass via waypoint (non-stopover)
+    const bypassWaypoints: google.maps.DirectionsWaypoint[] = [];
+    if (avoidNorthMarmara && !avoidHighways) {
+      const oLng = origin.lng(), dLng = destination.lng();
+      if ((oLng < 29.05 && dLng > 29.05) || (dLng < 29.05 && oLng > 29.05)) {
+        bypassWaypoints.push({
+          location: new google.maps.LatLng(41.046, 29.034),
+          stopover: false,
+        });
+      }
+    }
+
+    const allWaypoints = [...userWaypoints, ...bypassWaypoints];
+    const hasWaypoints = allWaypoints.length > 0;
 
     setLoading(true);
     try {
@@ -231,10 +444,10 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
         origin,
         destination,
         travelMode: google.maps.TravelMode.DRIVING,
-        provideRouteAlternatives: true,
+        provideRouteAlternatives: !hasWaypoints,
         avoidHighways,
         avoidTolls,
-        // Real-time traffic data — gives more realistic route durations and alternatives
+        ...(hasWaypoints ? { waypoints: allWaypoints, optimizeWaypoints: false } : {}),
         drivingOptions: {
           departureTime: new Date(),
           trafficModel: google.maps.TrafficModel.BEST_GUESS,
@@ -260,12 +473,16 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
     setIsExpanded(true);
     setAvoidHighways(false);
     setAvoidTolls(false);
+    setAvoidNorthMarmara(false);
+    setWaypoints([]);
+    setOriginEmpty(true);
+    setDestEmpty(true);
     onClear();
   };
 
   const panelBg = "rgba(10,16,30,0.96)";
   const inputBg = "rgba(255,255,255,0.05)";
-  const border = "1px solid rgba(255,255,255,0.08)";
+  const borderStyle = "1px solid rgba(255,255,255,0.08)";
 
   return (
     <div
@@ -273,13 +490,8 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
       <div
-        className="rounded-2xl shadow-2xl overflow-hidden"
-        style={{
-          background: panelBg,
-          border,
-          backdropFilter: "blur(20px)",
-          WebkitBackdropFilter: "blur(20px)",
-        }}
+        className="rounded-2xl shadow-2xl"
+        style={{ background: panelBg, border: borderStyle, backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)" }}
       >
         {/* Header */}
         <button
@@ -289,21 +501,14 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
         >
           <div className="flex items-center gap-2.5">
             <AppLogo size={28} />
-            <span className="text-white font-semibold text-sm tracking-wide select-none">
-              WH Navigasyon
-            </span>
+            <span className="text-white font-semibold text-sm tracking-wide select-none">WH Navigasyon</span>
           </div>
           <div
             className="flex items-center justify-center rounded-full transition-transform duration-200"
-            style={{
-              width: 28,
-              height: 28,
-              background: "rgba(255,255,255,0.06)",
-              transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)",
-            }}
+            style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)", transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)" }}
           >
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-              <path d="M2 4L6 8L10 4" stroke="#94A3B8" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M2 4L6 8L10 4" stroke="#94A3B8" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </div>
         </button>
@@ -311,101 +516,97 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
         {/* Form */}
         {isExpanded && (
           <div className="px-4 pb-4 space-y-2">
-            {/* Inputs */}
-            <div className="relative">
-              {/* Origin */}
-              <div
-                className="flex items-center gap-3 px-3 rounded-xl"
-                style={{ background: inputBg, border, height: 48 }}
-              >
+            {/* Origin */}
+            <div style={{ position: "relative" }}>
+              <div className="flex items-center gap-3 px-3 rounded-xl" style={{ background: inputBg, border: borderStyle, height: 48 }}>
                 <div className="flex-shrink-0 rounded-full" style={{ width: 9, height: 9, background: "#22C55E" }} />
                 <input
                   ref={originRef}
                   placeholder="Başlangıç noktası"
-                  style={{
-                    flex: 1,
-                    background: "transparent",
-                    color: "#F1F5F9",
-                    fontSize: 14,
-                    outline: "none",
-                    border: "none",
-                    minWidth: 0,
-                  }}
+                  onChange={(e) => setOriginEmpty(e.target.value === "")}
+                  onFocus={() => setOriginFocused(true)}
+                  onBlur={() => setTimeout(() => setOriginFocused(false), 150)}
+                  style={{ flex: 1, background: "transparent", color: "#F1F5F9", fontSize: 14, outline: "none", border: "none", minWidth: 0 }}
                   className="placeholder-slate-500"
                 />
-                <button
-                  onClick={() => useMyLocation("origin")}
-                  disabled={locating !== null}
-                  title="Mevcut konumumu kullan"
-                  className="flex-shrink-0 text-blue-400 hover:text-blue-300 disabled:opacity-40 transition-colors"
-                >
+                <button onClick={() => useMyLocation("origin")} disabled={locating !== null} className="flex-shrink-0 text-blue-400 hover:text-blue-300 disabled:opacity-40 transition-colors">
                   <GpsIcon spinning={locating === "origin"} />
                 </button>
               </div>
+              {originFocused && originEmpty && (
+                <RecentDropdown items={recentPlaces} onSelect={(p) => selectRecent(p, "origin")} />
+              )}
+            </div>
 
-              {/* Swap */}
-              <div className="flex items-center my-0.5 relative" style={{ height: 24 }}>
-                <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)", marginLeft: 16 }} />
-                <button
-                  onClick={handleSwap}
-                  title="Başlangıç ve varışı değiştir"
-                  className="flex items-center justify-center rounded-full text-slate-400 hover:text-white transition-colors flex-shrink-0"
-                  style={{
-                    width: 28,
-                    height: 28,
-                    background: "rgba(255,255,255,0.06)",
-                    border: "1px solid rgba(255,255,255,0.1)",
-                    margin: "0 8px",
-                  }}
-                >
-                  <SwapIcon />
-                </button>
-                <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)", marginRight: 16 }} />
-              </div>
-
-              {/* Destination */}
-              <div
-                className="flex items-center gap-3 px-3 rounded-xl"
-                style={{ background: inputBg, border, height: 48 }}
+            {/* Swap */}
+            <div className="flex items-center my-0.5 relative" style={{ height: 24 }}>
+              <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)", marginLeft: 16 }} />
+              <button
+                onClick={handleSwap}
+                title="Başlangıç ve varışı değiştir"
+                className="flex items-center justify-center rounded-full text-slate-400 hover:text-white transition-colors flex-shrink-0"
+                style={{ width: 28, height: 28, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", margin: "0 8px" }}
               >
+                <SwapIcon />
+              </button>
+              <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.06)", marginRight: 16 }} />
+            </div>
+
+            {/* Waypoints */}
+            {waypoints.map((_, i) => (
+              <WaypointInput
+                key={i}
+                index={i}
+                placesLib={placesLib}
+                biasPos={biasPos}
+                onPlaceChange={(place) => updateWaypoint(i, place)}
+                onRemove={() => removeWaypoint(i)}
+              />
+            ))}
+
+            {/* Destination */}
+            <div style={{ position: "relative" }}>
+              <div className="flex items-center gap-3 px-3 rounded-xl" style={{ background: inputBg, border: borderStyle, height: 48 }}>
                 <div className="flex-shrink-0 rounded-full" style={{ width: 9, height: 9, background: "#EF4444" }} />
                 <input
                   ref={destRef}
                   placeholder="Varış noktası"
-                  style={{
-                    flex: 1,
-                    background: "transparent",
-                    color: "#F1F5F9",
-                    fontSize: 14,
-                    outline: "none",
-                    border: "none",
-                    minWidth: 0,
-                  }}
+                  onChange={(e) => setDestEmpty(e.target.value === "")}
+                  onFocus={() => setDestFocused(true)}
+                  onBlur={() => setTimeout(() => setDestFocused(false), 150)}
+                  style={{ flex: 1, background: "transparent", color: "#F1F5F9", fontSize: 14, outline: "none", border: "none", minWidth: 0 }}
                   className="placeholder-slate-500"
                 />
-                <button
-                  onClick={() => useMyLocation("dest")}
-                  disabled={locating !== null}
-                  title="Mevcut konumumu varış yap"
-                  className="flex-shrink-0 text-blue-400 hover:text-blue-300 disabled:opacity-40 transition-colors"
-                >
+                <button onClick={() => useMyLocation("dest")} disabled={locating !== null} className="flex-shrink-0 text-blue-400 hover:text-blue-300 disabled:opacity-40 transition-colors">
                   <GpsIcon spinning={locating === "dest"} />
                 </button>
               </div>
+              {destFocused && destEmpty && (
+                <RecentDropdown items={recentPlaces} onSelect={(p) => selectRecent(p, "dest")} />
+              )}
             </div>
 
+            {/* Add waypoint button */}
+            {waypoints.length < 3 && (
+              <button
+                onClick={addWaypoint}
+                className="flex items-center gap-2 text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors"
+                style={{ paddingLeft: 4 }}
+              >
+                <div className="flex items-center justify-center rounded-full" style={{ width: 20, height: 20, background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.1)" }}>
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                    <path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                  </svg>
+                </div>
+                Ara durak ekle
+              </button>
+            )}
+
             {/* Route options */}
-            <div className="flex items-center gap-2 pt-0.5">
-              <ToggleChip
-                active={avoidHighways}
-                onClick={() => setAvoidHighways((v) => !v)}
-                label="Otoyol kaçın"
-              />
-              <ToggleChip
-                active={avoidTolls}
-                onClick={() => setAvoidTolls((v) => !v)}
-                label="Ücretli kaçın"
-              />
+            <div className="flex items-center gap-2 pt-0.5 flex-wrap">
+              <ToggleChip active={avoidHighways} onClick={() => setAvoidHighways((v) => !v)} label="Otoyol kaçın" />
+              <ToggleChip active={avoidTolls} onClick={() => setAvoidTolls((v) => !v)} label="Ücretli kaçın" />
+              <ToggleChip active={avoidNorthMarmara} onClick={() => setAvoidNorthMarmara((v) => !v)} label="K. Marmara kaçın (beta)" />
             </div>
 
             {error && <p className="text-red-400 text-xs px-1">{error}</p>}
@@ -415,37 +616,16 @@ export default function SearchPanel({ onRouteFound, onClear, hasRoute }: Props) 
                 onClick={handleRoute}
                 disabled={loading}
                 className="flex-1 text-white font-semibold text-sm rounded-xl transition-opacity disabled:opacity-50 flex items-center justify-center gap-2"
-                style={{
-                  height: 46,
-                  background: loading ? "#2563EB" : "linear-gradient(135deg, #2563EB, #3B82F6)",
-                  boxShadow: "0 4px 16px rgba(59,130,246,0.3)",
-                }}
+                style={{ height: 46, background: loading ? "#2563EB" : "linear-gradient(135deg, #2563EB, #3B82F6)", boxShadow: "0 4px 16px rgba(59,130,246,0.3)" }}
               >
                 {loading ? (
-                  <>
-                    <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    <span>Hesaplanıyor…</span>
-                  </>
+                  <><span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /><span>Hesaplanıyor…</span></>
                 ) : (
-                  <>
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-                      <path d="M3 12L21 12M21 12L14 5M21 12L14 19" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                    <span>Rota Bul</span>
-                  </>
+                  <><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M3 12L21 12M21 12L14 5M21 12L14 19" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg><span>Rota Bul</span></>
                 )}
               </button>
-
               {hasRoute && (
-                <button
-                  onClick={handleClear}
-                  className="px-4 text-slate-300 hover:text-white text-sm rounded-xl font-medium transition-colors"
-                  style={{
-                    height: 46,
-                    background: "rgba(255,255,255,0.07)",
-                    border: "1px solid rgba(255,255,255,0.09)",
-                  }}
-                >
+                <button onClick={handleClear} className="px-4 text-slate-300 hover:text-white text-sm rounded-xl font-medium transition-colors" style={{ height: 46, background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.09)" }}>
                   İptal
                 </button>
               )}

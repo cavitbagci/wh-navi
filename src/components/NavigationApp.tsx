@@ -8,6 +8,7 @@ import RadarAlert from "./RadarAlert";
 import NavigationBar from "./NavigationBar";
 import SpeedDisplay from "./SpeedDisplay";
 import DisclaimerModal from "./DisclaimerModal";
+import TripSummary from "./TripSummary";
 import {
   haversineDistance,
   distanceToPath,
@@ -59,6 +60,21 @@ export default function NavigationApp() {
   const [rerouting, setRerouting] = useState(false);
   const [rerouteLimitHit, setRerouteLimitHit] = useState(false);
 
+  // Trip summary
+  const [tripSummary, setTripSummary] = useState<{
+    durationMs: number;
+    distanceMeters: number;
+    maxSpeedKmh: number;
+    avgSpeedKmh: number;
+  } | null>(null);
+  // Accumulated trip stats in refs to avoid re-renders during collection
+  const tripStartRef = useRef<number>(0);
+  const tripDistRef = useRef<number>(0);
+  const tripLastPosRef = useRef<{ lat: number; lng: number } | null>(null);
+  const tripMaxSpeedRef = useRef<number>(0);
+  const tripSpeedSumRef = useRef<number>(0);
+  const tripSpeedCountRef = useRef<number>(0);
+
   const watchIdRef = useRef<number | null>(null);
   const alertCooldownRef = useRef<number>(0);
   const rerouteTimeRef = useRef<number>(0);
@@ -92,7 +108,8 @@ export default function NavigationApp() {
       lat: p.lat(),
       lng: p.lng(),
     }));
-    const newSteps = route?.legs[0]?.steps ?? [];
+    // Flatten all legs — supports multi-stop routes
+    const newSteps = (route?.legs ?? []).flatMap((leg) => leg.steps);
     setSteps(newSteps);
     setCurrentStepIndex(0);
   }, [directionsResult, selectedRouteIndex]);
@@ -105,11 +122,23 @@ export default function NavigationApp() {
 
       // Speed in km/h (coords.speed is m/s, null when unknown)
       const speedMs = pos.coords.speed;
-      setCurrentSpeed(speedMs != null && speedMs >= 0 ? speedMs * 3.6 : null);
+      const speedKmh = speedMs != null && speedMs >= 0 ? speedMs * 3.6 : null;
+      setCurrentSpeed(speedKmh);
 
       // Heading (degrees from north, null when stationary/unknown)
       const heading = pos.coords.heading;
       setUserHeading(heading != null && !isNaN(heading) ? heading : null);
+
+      // Trip stat accumulation
+      if (tripLastPosRef.current) {
+        tripDistRef.current += haversineDistance(tripLastPosRef.current, newPos);
+      }
+      tripLastPosRef.current = newPos;
+      if (speedKmh != null && speedKmh > 1) {
+        tripSpeedSumRef.current += speedKmh;
+        tripSpeedCountRef.current += 1;
+        if (speedKmh > tripMaxSpeedRef.current) tripMaxSpeedRef.current = speedKmh;
+      }
     },
     []
   );
@@ -213,8 +242,15 @@ export default function NavigationApp() {
     setNavigating(true);
     setCurrentStepIndex(0);
     setRerouteLimitHit(false);
+    setTripSummary(null);
     rerouteCountRef.current = 0;
     rerouteTimeRef.current = 0;
+    tripStartRef.current = Date.now();
+    tripDistRef.current = 0;
+    tripLastPosRef.current = null;
+    tripMaxSpeedRef.current = 0;
+    tripSpeedSumRef.current = 0;
+    tripSpeedCountRef.current = 0;
     if (!navigator.geolocation) return;
     watchIdRef.current = navigator.geolocation.watchPosition(
       handlePosition,
@@ -235,6 +271,17 @@ export default function NavigationApp() {
     if (watchIdRef.current !== null) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
+    }
+    // Show trip summary if the trip was meaningful (> 30s and > 100m)
+    const durationMs = Date.now() - tripStartRef.current;
+    if (durationMs > 30_000 && tripDistRef.current > 100) {
+      const n = tripSpeedCountRef.current;
+      setTripSummary({
+        durationMs,
+        distanceMeters: tripDistRef.current,
+        maxSpeedKmh: Math.round(tripMaxSpeedRef.current),
+        avgSpeedKmh: n > 0 ? Math.round(tripSpeedSumRef.current / n) : 0,
+      });
     }
   }, []);
 
@@ -311,11 +358,23 @@ export default function NavigationApp() {
           directionsResult={directionsResult}
           selectedRouteIndex={selectedRouteIndex}
           navigating={navigating}
+          userHeading={userHeading}
         />
       </Map>
 
       {/* First-visit disclaimer */}
       <DisclaimerModal />
+
+      {/* Trip summary modal */}
+      {tripSummary && (
+        <TripSummary
+          durationMs={tripSummary.durationMs}
+          distanceMeters={tripSummary.distanceMeters}
+          maxSpeedKmh={tripSummary.maxSpeedKmh}
+          avgSpeedKmh={tripSummary.avgSpeedKmh}
+          onClose={() => setTripSummary(null)}
+        />
+      )}
 
       {/* Navigation top bar */}
       {navigating && currentStep && (
